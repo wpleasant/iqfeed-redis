@@ -1,0 +1,3 @@
+hiredis/
+hiredis/**
+/iqfeed-redis
