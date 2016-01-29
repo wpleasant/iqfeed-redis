@@ -54,12 +54,32 @@
 
 // global fields for processing option -m  
 //    -note these are protocol 5.1 names and will change !!!
-static const char myFields[] = 
-"Symbol,Message Contents,"
+
+static const char myFields51[] = 
+"Symbol,"
+"Message Contents,"
 "Most Recent Trade Date,"
 "Most Recent Trade TimeMS,"
 "Bid TimeMS,"
 "Ask TimeMS,"
+"Most Recent Trade,"
+"Most Recent Trade Size,"
+"Bid,"
+"Bid Size,"
+"Ask,"
+"Ask Size,"
+"Number of Trades Today,"
+"Total Volume,"
+"TickID,"
+"Most Recent Trade Conditions";
+
+static const char myFields52[] = 
+"Symbol,"
+"Message Contents,"
+"Most Recent Trade Date,"
+"Most Recent Trade Time,"
+"Bid Time,"
+"Ask Time,"
 "Most Recent Trade,"
 "Most Recent Trade Size,"
 "Bid,"
@@ -80,6 +100,15 @@ static const char myFields[] =
 } while (0);
 
 
+/* build an int repsentation of the protocol */
+static unsigned int  PROTOCOL_ID (const char * x)
+{ 
+  if (!strncmp(x,"4.9",3))  return 49;
+  if (!strncmp(x,"5.0",3))  return 50;
+  if (!strncmp(x,"5.1",3))  return 51;
+  if (!strncmp(x,"5.2",3))  return 52;
+  return 49; /* iqfeed default */
+}
 
 /* A cheap string hack*/
 typedef struct  iqs 
@@ -178,7 +207,7 @@ void iq_send_cmd(int sockid, int verbose, const char *format, ...)
   va_list ap;
   va_start (ap, format);
   e += vsnprintf (buf,LBS*8,format, ap);
-  if( e < 0) 
+  if ( e < 0) 
   { EPRINT("buffer overflow while sending msg to iqfeed");
     return;
   }
@@ -344,7 +373,7 @@ int main (int argc, char **argv)
   int   redisPort     = 6379 ;
   int   iqfPort       = 5009;
   char  *iqfHost      = (char *)"127.0.0.1";
-  char  *pp           = (char *)"5.1";
+  char  *pp           = (char *)"5.2";
   int   useMyFields   = 0;
 
   ibuf  = (char *) malloc (bs * sizeof (char));
@@ -412,6 +441,7 @@ int main (int argc, char **argv)
   /* remove the '\n's default is yes */
   const unsigned int rmLF = rmlf; 
   const unsigned int recordTape = recordtape; 
+  const unsigned int ppid = PROTOCOL_ID(pp);
 
   /* Set up a server for control messages */
   p = ctp;
@@ -445,13 +475,16 @@ start:
   fprintf (stderr, " Connected to the IQ feed, ticks control port is %d\n",ctp);
 
   /* Set Protocol */
-  if(pp || strlen(pp)>2) 
+  if (pp || strlen(pp)>2) 
     iq_send_cmd(s, verbose,"S,%s,%s", "SET PROTOCOL",pp); 
 
   /*  Set Fields */
-  if(useMyFields) 
-  {
-    iq_send_cmd(s, verbose, "S,%s,%s","SELECT UPDATE FIELDS",myFields);
+  if (useMyFields) 
+  { if (ppid == 51)
+      iq_send_cmd(s, verbose, "S,%s,%s","SELECT UPDATE FIELDS",myFields51);
+    else 
+    if (ppid > 51)
+      iq_send_cmd(s, verbose, "S,%s,%s","SELECT UPDATE FIELDS",myFields52);
   } else 
   {
     fprintf(stderr," Reading fields from file\n");
@@ -476,7 +509,7 @@ start:
   pfds[1].events = POLLIN;
 
   int jj, ii;
-  long long mcount = 0;
+  unsigned long long mcount = 0;
   while (go)
   {
     p = poll (pfds, 2, 500);
@@ -543,7 +576,7 @@ start:
       if (j > 0)
       {
         k = write (s, (void *) obuf, j);
-        if(k == -1) EPRINT(" Error writing to iqfeed level 1 buffer");
+        if (k == -1) EPRINT(" Error writing to iqfeed level 1 buffer");
         /// fprintf(stderr, "Sending %s to IQ Feed\n",obuf);
         if (strncmp (obuf, "S,DISCONNECT", 3) == 0)
         {
