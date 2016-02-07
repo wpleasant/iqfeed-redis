@@ -47,7 +47,7 @@
 
 
 #define VERSION 1.0
-#define LBS 1024 
+#define ABS 64 
 #define BS  4096
 #define BACKLOG 100
 #define ctp 7778
@@ -110,7 +110,7 @@ static unsigned int  PROTOCOL_ID (const char * x)
   return 49; /* iqfeed default */
 }
 
-/* A cheap string hack*/
+/* A cheap string hack */
 typedef struct  iqs 
 {  int   len;
   char   buf[];
@@ -201,12 +201,12 @@ int tcpserv (int port)
 /* Helper function to format and send commands to iqfeed */
 void iq_send_cmd(int sockid, int verbose, const char *format, ...) 
 {
-  char buf[LBS*8];
+  char buf[BS*2];
   int  e = 0;
   
   va_list ap;
   va_start (ap, format);
-  e += vsnprintf (buf,LBS*8,format, ap);
+  e += vsnprintf (buf,BS*2,format, ap);
   if ( e < 0) 
   { EPRINT("buffer overflow while sending msg to iqfeed");
     return;
@@ -274,12 +274,13 @@ inline void clear_iqs (iqs * s)
    and copy each newline found into the array of iqs strings (**p); also setting
    the iqs->len. If the iqs string has not been cleared using clear_iqs() then
    the line will be appended to the end of the allready present string.
-   If an incomplete string is found then we copy it to *extra 
-   which is then later moved back to the first position in the array where we
-   can then append the incomplete data when it has been received.
+   If an incomplete string is found then we copy it to the next open iqs string
+   (setting incompIDX) which is then later moved back to the first position 
+   in the array where we can then append the incomplete data when it has been 
+   received.
 */
 
-static inline int split_iqs (char *ibuf, iqs **p, int lenread, iqs *extra)
+static inline int split_iqs (char *ibuf, iqs **p, int lenread, int * incompIDX)
 { 
   char * tt;
   char * tbuf = ibuf;
@@ -297,27 +298,22 @@ static inline int split_iqs (char *ibuf, iqs **p, int lenread, iqs *extra)
       lloc += tlen; /* one past '\n' */
       ++i;
     }
-  } while (tt != NULL && lloc < lenread && i < LBS ); 
+  } while (tt != NULL && lloc < lenread && i < ABS-1 ); 
 
   if (lloc<lenread)
-  { /* copy incomplete line to "iqs *extra" */
+  { /* Copy incomplete line to the next position and mark its location */
+    iqs * s = p[i+1];
     tlen = tbuf+lenread - (tbuf+lloc)+1;
-    memcpy(extra->buf+extra->len,tbuf+lloc,tlen);
-    extra->len += tlen-1;
-    extra->buf[extra->len+1] = '\0';
+    memcpy(s->buf+s->len,tbuf+lloc,tlen);
+    s->len += tlen-1;
+    s->buf[s->len+1] = '\0';
+    *incompIDX = i;
+  } else 
+  { 
+    *incompIDX = 0;
   }
   return i;
 }
-
-
-/* 
-   Used to move the left-overs back to first position.
-   A pointer-swap be faster or disrupt memory alignment ???? 
-*/
-#define SHIFT_EXTRA_UP(s, extra, ii) do {           \
-  memcpy(s[(ii)], extra, sizeof(iqs)+extra->len+1); \
-  clear_iqs(extra);                                 \
-} while (0)
 
 
 
@@ -327,7 +323,7 @@ inline int  g_push (iqs *, const char *, redisContext *, unsigned int);
 inline void t_push (iqs *, const char *, redisContext *, unsigned int);
 
 static const char * helpmsg =
-"Options: iqfeed-redis [-h]\n" 
+"\nOptions: iqfeed-redis [-h]\n" 
 " [-I <iqfeedhost>]\n"
 " [-P <iqfeedport>]\n" 
 " [-H <redishost>]\n"
@@ -357,7 +353,7 @@ int main (int argc, char **argv)
   int s, p, j, k, go, t, u, c, i;
   unsigned int rmlf = 1, newson = 0, useunixfile = 0;
   unsigned int recordtape = 0, verbose = 1;
-  struct timeval tv;
+  //struct timeval tv;
   struct pollfd pfds[2];
   struct sockaddr_in sa;
   struct sockaddr_in sin;
@@ -365,12 +361,12 @@ int main (int argc, char **argv)
   char *ibuf;
   char *obuf;
   int bs  = BS;
-  int lbs = LBS;
+  int abs = ABS;
   redisContext *redis;
   
   char *redisFilePath = (char * )"/tmp/redis.sock";
   char *redisHost     = (char * )"127.0.0.1";
-  int   redisPort     = 6379 ;
+  int   redisPort     = 6379;
   int   iqfPort       = 5009;
   char  *iqfHost      = (char *)"127.0.0.1";
   char  *pp           = (char *)"5.2";
@@ -382,13 +378,11 @@ int main (int argc, char **argv)
   if (!obuf)   IQERR("allocation error"); 
 
 
-  /* allocate the full LBS array of strings here... over-kill */
-  iqs **sbs  = calloc(lbs, sizeof(iqs *));
+  /* allocate an array of strings here.. */
+  iqs **sbs  = calloc(abs, sizeof(iqs *));
   if (!sbs)  IQERR("error allocating iqs array"); 
-  for (i=0;i<lbs;i++)
+  for (i=0;i<abs;i++)
     sbs[i] =  alloc_iqs(sbs[i]);
-  iqs * extra = NULL; 
-  extra = alloc_iqs(extra); // calloc(1,size(iqs *));
 
 
   /* Parse command-line options */
@@ -430,7 +424,7 @@ int main (int argc, char **argv)
       case 't':
         ++recordtape;
         break;
-      case 'k' :
+      case 'k':
         rmlf = 0;
         break;
       default:
@@ -454,6 +448,7 @@ start:
   bzero (ibuf, bs);
   bzero (obuf, bs);
 
+  if (verbose) fprintf(stderr,"\n");
   /* connect to redis */
   if (useunixfile)
   { fprintf (stderr," Connecting to redis using %s\n",redisFilePath);
@@ -473,7 +468,7 @@ start:
   if (s < 0)
     goto end;
   fprintf (stderr, " Connected to the IQ feed, ticks control port is %d\n",ctp);
-
+  
   /* Set Protocol */
   if (pp || strlen(pp)>2) 
     iq_send_cmd(s, verbose,"S,%s,%s", "SET PROTOCOL",pp); 
@@ -508,7 +503,7 @@ start:
   pfds[1].fd = t;
   pfds[1].events = POLLIN;
 
-  int jj, ii;
+  int jj, ii, incompIDX = 0;
   unsigned long long mcount = 0;
   while (go)
   {
@@ -522,8 +517,8 @@ start:
       j = read(s, (void *) ibuf, bs-sbs[0]->len);
       if (j > 0)
       {
-        gettimeofday(&tv,NULL); /// append to each string ???
-        jj = split_iqs(ibuf, sbs, j, extra);
+        //gettimeofday(&tv,NULL); /// append to each string ???
+        jj = split_iqs(ibuf, sbs, j, &incompIDX);
         for (ii=0; ii<jj; ii++)
         { 
           iqs * msg = sbs[ii];
@@ -561,7 +556,12 @@ start:
           clear_iqs(msg);
         }
         mcount += jj;
-        if (extra->len) SHIFT_EXTRA_UP(sbs, extra, 0);
+        if(incompIDX) 
+        { /* swap incomplete string to first position in sbs*/
+          iqs * tmpiqs = sbs[0];
+          sbs[0]  = sbs[incompIDX];
+          sbs[incompIDX] = tmpiqs;
+        }
         bzero(ibuf, j);
       }
       else
@@ -596,8 +596,7 @@ end:
   /* Never get here  */
   if (ibuf)  free(ibuf);
   if (obuf)  free(obuf);
-  if (extra) free(extra);
-  for (i=0;i<lbs;i++)  if (sbs[i]) free(sbs[i]);
+  for (i=0;i<abs;i++)  if (sbs[i]) free(sbs[i]);
   if (sbs) free(sbs);
   return 0;
 }
