@@ -302,7 +302,7 @@ static inline int split_iqs (char *ibuf, iqs **p, int lenread, int * incompIDX)
 
   if (lloc<lenread)
   { /* Copy incomplete line to the next position and mark its location */
-    iqs * s = p[i+1];
+    iqs * s = p[i];
     tlen = tbuf+lenread - (tbuf+lloc)+1;
     memcpy(s->buf+s->len,tbuf+lloc,tlen);
     s->len += tlen-1;
@@ -314,7 +314,6 @@ static inline int split_iqs (char *ibuf, iqs **p, int lenread, int * incompIDX)
   }
   return i;
 }
-
 
 
 inline int  q_push (iqs *, redisContext *, unsigned int);
@@ -549,18 +548,19 @@ start:
             case 'n' :
               g_push (msg, ".notfound", redis, rmLF);
               break;
-            default :
+            default  :
               g_push (msg, ".others", redis, rmLF);
               break;
           }
           clear_iqs(msg);
         }
         mcount += jj;
-        if(incompIDX) 
-        { /* swap incomplete string to first position in sbs*/
+        if (incompIDX)
+        { /* swap incomplete string to first position in sbs */
           iqs * tmpiqs = sbs[0];
           sbs[0]  = sbs[incompIDX];
           sbs[incompIDX] = tmpiqs;
+          incompIDX = 0;
         }
         bzero(ibuf, j);
       }
